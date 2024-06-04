@@ -35,6 +35,15 @@ def download_episodes_and_save_remotely(episodes):
     transport.close()
     client.close()
     
+
+def download_and_upload_episode(download_url, remote_path, sftp):
+    with requests.get(download_url, stream=True) as r:
+        r.raise_for_status()
+        with sftp.file(remote_path, 'wb') as remote_file:
+            for chunk in r.iter_content(chunk_size=8192):
+                if chunk:
+                    remote_file.write(chunk)
+    
         
 def download_episodes_and_save_locally(episodes):
     # meant to be run on the sftp pc, not a remote pc
@@ -50,16 +59,18 @@ def download_episodes_and_save_locally(episodes):
         except Exception as e:
             print(e)
     client.close()
-        
-
-def download_and_upload_episode(download_url, remote_path, sftp):
+    
+    
+def download_episode_locally(download_url, save_location):
     with requests.get(download_url, stream=True) as r:
         r.raise_for_status()
-        with sftp.file(remote_path, 'wb') as remote_file:
-            for chunk in r.iter_content(chunk_size=8192):
-                if chunk:
-                    remote_file.write(chunk)
-
+        with open(save_location, 'wb') as f:
+            for chunk in r.iter_content(chunk_size=8192): 
+                # If you have chunk encoded response uncomment if
+                # and set chunk_size parameter to None.
+                #if chunk: 
+                f.write(chunk)
+                
 
 def make_filename(episode):
     filename = episode['downloadUrl'].split('/')[-1]  # this filename is only referenced to get the extension. a custom filename will be used for the rest of the name
@@ -85,17 +96,7 @@ def download_episodes(episodes):
         filename = make_filename(episode)
         save_location = os.path.join(LOCAL_SAVE_FOLDER, filename)
         download_episode_locally(download_url, save_location)
-        
-    
-def download_episode_locally(download_url, save_location):
-    with requests.get(url, stream=True) as r:
-        r.raise_for_status()
-        with open(save_filename, 'wb') as f:
-            for chunk in r.iter_content(chunk_size=8192): 
-                # If you have chunk encoded response uncomment if
-                # and set chunk_size parameter to None.
-                #if chunk: 
-                f.write(chunk)
+
 
 def delete_remote_files(to_delete):    
     private_key = paramiko.RSAKey(filename=PRIVATE_KEY_PATH)
@@ -105,3 +106,14 @@ def delete_remote_files(to_delete):
     for remote_path in to_delete:
         sftp.remove(remote_path)
          
+         
+def transfer_single_file(filepath):
+    private_key = paramiko.RSAKey(filename=PRIVATE_KEY_PATH)
+    transport = paramiko.Transport((SSH_CREDENTIALS['host'], SSH_CREDENTIALS['port']))
+    transport.connect(username=SSH_CREDENTIALS['username'], pkey=private_key)
+    sftp = paramiko.SFTPClient.from_transport(transport)
+    filename = os.path.basename(filepath)
+    remote_path = os.path.join(SFTP_SAVE_FOLDER, filename)
+    sftp.put(filepath, remote_path)
+
+transfer_single_file("podcasts_rss.json")

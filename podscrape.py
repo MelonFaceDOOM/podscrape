@@ -8,7 +8,6 @@ def get_podnews_top_50(output_filepath):
     
 def scrape_episodes_from_rss_and_save_remotely():
     unscraped_episodes = get_unscraped_episodes()
-    unscraped_episodes = unscraped_episodes[:50]
     download_episodes_and_save_remotely(unscraped_episodes)
     
 def scrape_episodes_from_rss_and_save_locally():
