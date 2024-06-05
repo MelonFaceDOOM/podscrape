@@ -1,5 +1,6 @@
 import paramiko
 import os
+import sleep
 import requests
 from db_client import get_client
 from config import SSH_CREDENTIALS, NETWORK_DB_CREDENTIALS, PRIVATE_KEY_PATH, LOCAL_SAVE_FOLDER, SFTP_SAVE_FOLDER
@@ -22,6 +23,7 @@ def download_episodes_and_save_remotely(episodes):
     transport.connect(username=SSH_CREDENTIALS['username'], pkey=private_key)
     sftp = paramiko.SFTPClient.from_transport(transport)
     
+    consecutive_fails = 0 
     for episode in episodes:
         try:
             download_url = episode['downloadUrl']
@@ -29,7 +31,10 @@ def download_episodes_and_save_remotely(episodes):
             remote_path = os.path.join(SFTP_SAVE_FOLDER, filename)
             download_and_upload_episode(download_url, remote_path, sftp)
             client.insert_episode(episode)
+            consecutive_fails = 0
         except Exception as e:
+            consecutive_fails += 1
+            time.sleep(2**consecutive_fails)
             print(e)
     sftp.close()
     transport.close()
@@ -115,5 +120,3 @@ def transfer_single_file(filepath):
     filename = os.path.basename(filepath)
     remote_path = os.path.join(SFTP_SAVE_FOLDER, filename)
     sftp.put(filepath, remote_path)
-
-transfer_single_file("podcasts_rss.json")
