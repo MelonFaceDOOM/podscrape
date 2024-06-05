@@ -1,6 +1,6 @@
 import paramiko
 import os
-import sleep
+import time
 import requests
 from db_client import get_client
 from config import SSH_CREDENTIALS, NETWORK_DB_CREDENTIALS, PRIVATE_KEY_PATH, LOCAL_SAVE_FOLDER, SFTP_SAVE_FOLDER
@@ -53,6 +53,7 @@ def download_and_upload_episode(download_url, remote_path, sftp):
 def download_episodes_and_save_locally(episodes):
     # meant to be run on the sftp pc, not a remote pc
     client = get_client()
+    consecutive_fails = 0 
     for episode in episodes:
         try:
             download_url = episode['downloadUrl']
@@ -61,13 +62,16 @@ def download_episodes_and_save_locally(episodes):
             save_location = os.path.join(LOCAL_SAVE_FOLDER, filename)
             download_episode_locally(download_url, save_location)
             client.insert_episode(episode)
+            consecutive_fails = 0
         except Exception as e:
+            consecutive_fails += 1
+            time.sleep(2**consecutive_fails)
             print(e)
     client.close()
     
     
 def download_episode_locally(download_url, save_location):
-    with requests.get(download_url, stream=True) as r:
+    with requests.get(download_url, stream=True, timeout=60) as r:
         r.raise_for_status()
         with open(save_location, 'wb') as f:
             for chunk in r.iter_content(chunk_size=8192): 
