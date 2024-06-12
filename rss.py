@@ -1,22 +1,45 @@
 import os
 import json
 import feedparser
+import requests
+import datetime
+from urllib.parse import urlparse
 from utils import slugify
 from config import RSS_FILE, PODNEWS_TOP50
 from db_client import get_client
  
 
-""" TODO: add updating rss features. visit rss url. Check guid in entries and add these to existing entries
-if they don't exist and then save in dict in json file.
-"""
-
+def update_rss_file():
+    client = get_client()
+    podcasts = client.get_podcasts()
+    rss_podcasts = {}
+    for podcast in podcasts:
+        r = requests.get(podcast['rss_url'])
+        rss = r.text
+        rss_podcasts[podcast['title']] = {}
+        rss_podcasts[podcast['title']]['rssUrl'] = podcast['rss_url']
+        rss_podcasts[podcast['title']]['rss'] = rss
+    
+    with open(RSS_FILE, 'w') as f:
+        json.dump(rss_podcasts, f, indent=4)
+ 
+ 
 def get_unscraped_episodes():
     client = get_client()
     episodes_from_rss = read_episode_info_from_rss()
     db_id_list = client.get_id_list()
     unscraped_episodes = [e for e in episodes_from_rss if e['unique_id'] not in db_id_list]
+    unscraped_episodes = [e for e in unscraped_episodes if is_valid_url(e['downloadUrl'])]
     return unscraped_episodes
     
+
+def is_valid_url(url):
+    try:
+        result = urlparse(url)
+        return all([result.scheme, result.netloc])
+    except ValueError:
+        return False
+        
 
 def read_episode_info_from_rss():
     """reads episodes into a list of dicts and creates a unique id based on podcast name and guid that is slugified

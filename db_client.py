@@ -1,5 +1,6 @@
 from datetime import datetime
 import psycopg2
+from psycopg2.extras import RealDictCursor
 from config import NETWORK_DB_CREDENTIALS
 
 def get_client():
@@ -22,14 +23,17 @@ class Client:
             cur.execute('''CREATE TABLE IF NOT EXISTS podcasts
                              (id SERIAL PRIMARY KEY,
                              date_entered TIMESTAMP DEFAULT current_timestamp,
-                             title TEXT NOT NULL)''')
+                             title TEXT NOT NULL,
+                             rss_url TEXT)''')
             cur.execute("""CREATE TABLE IF NOT EXISTS episodes
                              (id TEXT PRIMARY KEY NOT NULL,
+                             date_entered TIMESTAMP DEFAULT current_timestamp,
                              guid TEXT NOT NULL,
                              title TEXT NOT NULL,
                              description TEXT,
                              pub_date TIMESTAMP,
                              download_url TEXT,
+                             sftp_url TEXT,
                              transcript TEXT,
                              podcast_id INTEGER,
                              title_ts TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', replace(title, '''',''))) STORED,
@@ -80,17 +84,24 @@ class Client:
                 podcast_id = cur.fetchone()[0]    
             pub_date = datetime.strptime(episode_data['pubDate'], '%a, %d %b %Y %H:%M:%S %z')
             cur.execute('''
-                INSERT INTO episodes (id, guid, title, pub_date, download_url, description, transcript, podcast_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)''', 
+                INSERT INTO episodes (id, guid, title, pub_date, download_url, sftp_url, description, transcript, podcast_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)''', 
                  (episode_data['unique_id'],
                   episode_data['guid'],
                   episode_data['title'],
                   pub_date,
                   episode_data['downloadUrl'],
+                  episode_data['sftp_url'],
                   episode_data.get('description', None),
                   episode_data.get('transcript', None),
                   podcast_id))
             self.conn.commit()
+            
+    def get_podcasts(self):
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute('''SELECT * from podcasts''')
+            r = cur.fetchall()
+        return r
             
     def get_id_list(self):
         with self.conn.cursor() as cur:

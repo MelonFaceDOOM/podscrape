@@ -3,7 +3,7 @@ import os
 import time
 import requests
 from db_client import get_client
-from config import SSH_CREDENTIALS, NETWORK_DB_CREDENTIALS, PRIVATE_KEY_PATH, LOCAL_SAVE_FOLDER, SFTP_SAVE_FOLDER
+from config import SFTP_CREDENTIALS, NETWORK_DB_CREDENTIALS, PRIVATE_KEY_PATH, LOCAL_SAVE_FOLDER, SFTP_SAVE_FOLDER
 
 
 """
@@ -18,9 +18,8 @@ def download_episodes_and_save_remotely(episodes):
     # episodes should be a list of dicts 
     # expected dict format can be found in rss.py
     client = get_client()
-    private_key = paramiko.RSAKey(filename=PRIVATE_KEY_PATH)
-    transport = paramiko.Transport((SSH_CREDENTIALS['host'], SSH_CREDENTIALS['port']))
-    transport.connect(username=SSH_CREDENTIALS['username'], pkey=private_key)
+    transport = paramiko.Transport((SFTP_CREDENTIALS['host'], SFTP_CREDENTIALS['port']))
+    transport.connect(username=SFTP_CREDENTIALS['username'], password=SFTP_CREDENTIALS['password'])
     sftp = paramiko.SFTPClient.from_transport(transport)
     
     consecutive_fails = 0 
@@ -30,11 +29,15 @@ def download_episodes_and_save_remotely(episodes):
             filename = make_filename(episode)
             remote_path = os.path.join(SFTP_SAVE_FOLDER, filename)
             download_and_upload_episode(download_url, remote_path, sftp)
+            episode['sftp_url'] = remote_path
             client.insert_episode(episode)
             consecutive_fails = 0
         except Exception as e:
-            consecutive_fails += 1
-            time.sleep(2**consecutive_fails)
+            if consecutive_fails == 6:
+                pass # stay at 6
+            else:
+                consecutive_fails += 1
+            print(f"sleeping for {2**consecutive_fails}", e)
             print(e)
     sftp.close()
     transport.close()
@@ -61,12 +64,16 @@ def download_episodes_and_save_locally(episodes):
             filename = make_filename(episode)
             save_location = os.path.join(LOCAL_SAVE_FOLDER, filename)
             download_episode_locally(download_url, save_location)
+            episode['sftp_url'] = save_location
             client.insert_episode(episode)
             consecutive_fails = 0
         except Exception as e:
-            consecutive_fails += 1
+            if consecutive_fails == 6:
+                pass # stay at 6
+            else:
+                consecutive_fails += 1
             time.sleep(2**consecutive_fails)
-            print(e)
+            print(f"sleeping for {2**consecutive_fails}", e)
     client.close()
     
     
@@ -108,18 +115,16 @@ def download_episodes(episodes):
 
 
 def delete_remote_files(to_delete):    
-    private_key = paramiko.RSAKey(filename=PRIVATE_KEY_PATH)
-    transport = paramiko.Transport((SSH_CREDENTIALS['host'], SSH_CREDENTIALS['port']))
-    transport.connect(username=SSH_CREDENTIALS['username'], pkey=private_key)
+    transport = paramiko.Transport((SFTP_CREDENTIALS['host'], SFTP_CREDENTIALS['port']))
+    transport.connect(username=SFTP_CREDENTIALS['username'], password=SFTP_CREDENTIALS['password'])
     sftp = paramiko.SFTPClient.from_transport(transport)
     for remote_path in to_delete:
         sftp.remove(remote_path)
          
          
 def transfer_single_file(filepath):
-    private_key = paramiko.RSAKey(filename=PRIVATE_KEY_PATH)
-    transport = paramiko.Transport((SSH_CREDENTIALS['host'], SSH_CREDENTIALS['port']))
-    transport.connect(username=SSH_CREDENTIALS['username'], pkey=private_key)
+    transport = paramiko.Transport((SFTP_CREDENTIALS['host'], SFTP_CREDENTIALS['port']))
+    transport.connect(username=SFTP_CREDENTIALS['username'], password=SFTP_CREDENTIALS['password'])
     sftp = paramiko.SFTPClient.from_transport(transport)
     filename = os.path.basename(filepath)
     remote_path = os.path.join(SFTP_SAVE_FOLDER, filename)
