@@ -23,10 +23,10 @@ def db_ep_count():
     
 def update_local():
     update_rss_file()
-    download_episodes_and_save_locally()
+    scrape_episodes_from_rss_and_save_locally()
     
 def update_remote():
-    # update_rss_file()
+    update_rss_file()
     scrape_episodes_from_rss_and_save_remotely()
     
 def main():

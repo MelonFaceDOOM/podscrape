@@ -6,13 +6,6 @@ from db_client import get_client
 from config import SFTP_CREDENTIALS, NETWORK_DB_CREDENTIALS, PRIVATE_KEY_PATH, LOCAL_SAVE_FOLDER, SFTP_SAVE_FOLDER
 
 
-"""
-Download podcasts
-    1)save mp3 to sftp server
-    2)log ep info to db 
-"""
-
-
 def download_episodes_and_save_remotely(episodes):
     # meant to be run on a remote pc that wishes to save to sftp pc
     # episodes should be a list of dicts 
@@ -96,7 +89,7 @@ def make_filename(episode):
     
 
 #####
-# alternate dl/ul things that aren't really part of the application:
+# alternative dl/ul things that aren't really part of the application:
 def bulk_upload_files(local_directory, remote_directory, sftp):
     for filename in os.listdir(local_directory):
         if filename.endswith(".mp3"):
