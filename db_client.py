@@ -114,3 +114,21 @@ class Client:
             cur.execute('''SELECT COUNT(*) from episodes''')
             r = cur.fetchone()
             return r[0]
+            
+            
+    def recent_episode_counts(self):
+        """get count for episodes saved to db in each of the last 7 days"""
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                SELECT 
+                    DATE(date_entered) AS day, 
+                    COUNT(*) AS episode_count
+                FROM episodes
+                WHERE date_entered >= NOW() - INTERVAL '7 days'
+                GROUP BY day
+                ORDER BY day
+            """)
+
+            # Fetch and print the results
+            rows = cur.fetchall()
+            return rows

@@ -2,6 +2,7 @@ import paramiko
 import os
 import time
 import requests
+from datetime import datetime
 from db_client import get_client
 from config import SFTP_CREDENTIALS, NETWORK_DB_CREDENTIALS, PRIVATE_KEY_PATH, LOCAL_SAVE_FOLDER, SFTP_SAVE_FOLDER
 
@@ -31,7 +32,10 @@ def download_episodes_and_save_remotely(episodes):
             else:
                 consecutive_fails += 1
             print(f"sleeping for {2**consecutive_fails}", e)
-            print(e)
+            current_timestamp = datetime.now()
+            formatted_timestamp = current_timestamp.strftime('%Y-%m-%d %H:%M')
+            print(formatted_timestamp, e)
+            time.sleep(2**consecutive_fails)
     sftp.close()
     transport.close()
     client.close()
@@ -65,8 +69,11 @@ def download_episodes_and_save_locally(episodes):
                 pass # stay at 6
             else:
                 consecutive_fails += 1
-            time.sleep(2**consecutive_fails)
             print(f"sleeping for {2**consecutive_fails}", e)
+            current_timestamp = datetime.now()
+            formatted_timestamp = current_timestamp.strftime('%Y-%m-%d %H:%M')
+            print(formatted_timestamp, e)
+            time.sleep(2**consecutive_fails)
     client.close()
     
     

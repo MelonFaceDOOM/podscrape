@@ -21,6 +21,13 @@ def db_ep_count():
     print(client.ep_count())
     client.close()
     
+def db_recent_count():
+    client = get_client()
+    recent_episode_counts = client.recent_episode_counts()
+    for row in recent_episode_counts:
+        print(f"{row[0]}: {row[1]}")
+    client.close()
+    
 def update_local():
     update_rss_file()
     scrape_episodes_from_rss_and_save_locally()
@@ -38,6 +45,7 @@ def main():
     parser_remote = subparsers.add_parser('scrape_remote', help='Scrape episodes from RSS feeds and save remotely')
     parser_local = subparsers.add_parser('scrape_local', help='Scrape episodes from RSS feeds and save locally')
     parser_ep_count = subparsers.add_parser('count', help='Check how many episodes are in the database.')
+    parser_recent = subparsers.add_parser('recent', help='Check how many episodes were saved in the last week.')
     parser_update_local = subparsers.add_parser('update_local', help='Update RSS feeds, download new episodes, save locally.')
     parser_update_remote = subparsers.add_parser('update_remote', help='Update RSS feeds, download new episodes, save remotely.')
     
@@ -51,6 +59,8 @@ def main():
         scrape_episodes_from_rss_and_save_remotely()
     elif args.command == 'count':
         db_ep_count()
+    elif args.command == 'recent':
+        db_recent_count()
     elif args.command == 'update_local': 
         update_local()
     elif args.command == 'update_remote':

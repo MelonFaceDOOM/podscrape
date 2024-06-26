@@ -83,6 +83,7 @@ def get_sftp_urls(sftp):
     sftp_urls = sftp.listdir_attr('podcasts/')
     sftp_urls = ["podcasts/" + attr.filename for attr in sftp_urls]
     return sftp_urls
-        
+
+
 if __name__ == "__main__":
     search_and_download()
