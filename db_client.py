@@ -14,32 +14,75 @@ def get_client():
 class Client:
     def __init__(self, database, user, password, host, port):
         self.conn = psycopg2.connect(database=database, user=user, password=password, host=host, port=port)
-        
+
     def close(self):
         self.conn.close()
-        
+
     def make_core_tables(self):
         with self.conn.cursor() as cur:
-            cur.execute('''CREATE TABLE IF NOT EXISTS podcasts
-                             (id SERIAL PRIMARY KEY,
-                             date_entered TIMESTAMP DEFAULT current_timestamp,
-                             title TEXT NOT NULL,
-                             rss_url TEXT)''')
-            cur.execute("""CREATE TABLE IF NOT EXISTS episodes
-                             (id TEXT PRIMARY KEY NOT NULL,
-                             date_entered TIMESTAMP DEFAULT current_timestamp,
-                             guid TEXT NOT NULL,
-                             title TEXT NOT NULL,
-                             description TEXT,
-                             pub_date TIMESTAMP,
-                             download_url TEXT,
-                             sftp_url TEXT,
-                             transcript TEXT,
-                             podcast_id INTEGER,
-                             title_ts TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', replace(title, '''',''))) STORED,
-                             description_ts TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', replace(description, '''',''))) STORED,
-                             transcript_ts TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', replace(transcript, '''',''))) STORED,
-                             FOREIGN KEY (podcast_id) REFERENCES podcasts (id))""")
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS podcasts (
+                    id           SERIAL PRIMARY KEY,
+                    date_entered TIMESTAMP DEFAULT current_timestamp,
+                    title        TEXT NOT NULL,
+                    rss_url      TEXT
+                    );
+             """)
+            cur.execute("""
+                CREATE TABLE episodes (
+                    id             TEXT PRIMARY KEY,
+                    date_entered   TIMESTAMP DEFAULT current_timestamp,
+                    audio_path     TEXT NOT NULL,      -- sftp://… or local path
+                    guid           TEXT NOT NULL,
+                    duration_s     NUMERIC,            -- optional, whole episode length
+                    title          TEXT,
+                    description    TEXT,
+                    pub_date       TIMESTAMP,
+                    download_url   TEXT,
+                    podcast_id     INTEGER REFERENCES podcasts(id)
+                );
+            """)
+            cur.execute("""
+                CREATE TABLE transcript_segments (
+                    id          BIGSERIAL PRIMARY KEY,
+                    episode_id  TEXT REFERENCES episodes(id) ON DELETE CASCADE,
+                    seg_idx     INT,                -- 0,1,2…
+                    start_s     NUMERIC,            -- 12.34
+                    end_s       NUMERIC,            -- 18.92
+                    text        TEXT,
+                    UNIQUE(episode_id, seg_idx)
+                );
+            """)
+            cur.execute("""
+                CREATE TABLE transcript_words (
+                    seg_id      BIGINT REFERENCES transcript_segments(id) ON DELETE CASCADE,
+                    word_idx    INT,                -- position inside segment
+                    start_s     NUMERIC,
+                    end_s       NUMERIC,
+                    word        TEXT,
+                    PRIMARY KEY (seg_id, word_idx)
+                );
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS seg_time_idx
+                    ON transcript_segments (episode_id, start_s);
+            
+                CREATE INDEX IF NOT EXISTS seg_text_gin
+                    ON transcript_segments
+                    USING GIN (to_tsvector('english', replace(text, '''', '')));
+                
+                CREATE INDEX IF NOT EXISTS ep_title_gin
+                    ON episodes
+                    USING GIN (to_tsvector('english', replace(title, '''', '')));
+                
+                CREATE INDEX IF NOT EXISTS ep_desc_gin
+                    ON episodes
+                    USING GIN (to_tsvector('english', replace(description, '''', '')));
+            """)
+
+
+    def make_core_tables(self):
+        with self.conn.cursor() as cur:
             cur.execute('''CREATE INDEX IF NOT EXISTS title_ts_idx ON episodes USING GIN (title_ts);''')
             cur.execute('''CREATE INDEX IF NOT EXISTS description_ts_idx ON episodes USING GIN (description_ts);''')
             cur.execute('''CREATE INDEX IF NOT EXISTS transcript_ts_idx ON episodes USING GIN (transcript_ts);''')
@@ -100,6 +143,12 @@ class Client:
     def get_podcasts(self):
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute('''SELECT * from podcasts''')
+            r = cur.fetchall()
+        return r
+
+    def get_episodes(self):
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute('''SELECT * from episodes ORDER BY pub_date DESC NULLS LAST;''')
             r = cur.fetchall()
         return r
             

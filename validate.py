@@ -1,9 +1,6 @@
-import os
 import psycopg2
 import paramiko
-from datetime import datetime
 from psycopg2.extras import RealDictCursor
-import pandas as pd
 from config import NETWORK_DB_CREDENTIALS, SFTP_CREDENTIALS
 from rss import get_unscraped_episodes
 
@@ -56,7 +53,7 @@ def remove_sftp_duds():
         if sftp_url and sftp_url not in db_urls:
             sftp_not_in_db.append(sftp_url)
     print(f"removing {len(sftp_not_in_db)} files from sftp. hopefully u doublechecked before deleting...")
-    for url in sftp_not_in_db:
+    # for url in sftp_not_in_db:
         # sftp.remove(url)
     sftp.close()
     transport.close()

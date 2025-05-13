@@ -1,5 +1,3 @@
-import json
-import feedparser
 import subprocess
 import psutil
 import platform

@@ -1,0 +1,34 @@
+start transcribing and then deleting irrelevant podcasts from server. Use comprehensive keyword thing.
+actually delete or compress? compress and replace url with compressed url
+
+get transcription working on work pc
+get work to leave pc on overnight (thurs)
+
+
+estimates for transcribing 39k podcasts:
+openai_whisper_base          : 8471.9 s for 20 eps →  est. 4612.4 h for all
+faster_whisper_base          : 2458.0 s for 20 eps →  est. 1338.2 h for all
+faster_whisper_tiny          : 1928.3 s for 20 eps →  est. 1049.8 h for all
+
+update scraping to save as "podcasts/filename" and to save to audio_path instead of sftp_url.
+look at new table to see if any other changes are needed.
+git push/pull to ssh_m
+
+
+score transcribe test
+set up benchmark
+set up full transcription code with model selection as variable at top
+pip freeze, git push
+make note of imagemagick with legacy + adding folder to path + option change in python file after improt
+start ppt
+ - status before
+ - status now
+ - benchmark results
+ - transcription test app
+ - estimated time
+ - future daily load
+ - next steps
+ - measles assignment
+ - search to filter down to vaccine-related stuff
+ - upload filtered stuff to azure
+

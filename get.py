@@ -8,6 +8,7 @@ search_term = "vaccine"
 DL_DIRECTORY = "episodes/"
 os.makedirs(DL_DIRECTORY, exist_ok=True)
 
+
 def search_and_download():
     transport = paramiko.Transport((SFTP_CREDENTIALS['host'], SFTP_CREDENTIALS['port']))
     transport.connect(username=SFTP_CREDENTIALS['username'], password=SFTP_CREDENTIALS['password'])
@@ -42,15 +43,26 @@ def search_and_download():
         return
         
     print(f"Downloading {len(episodes)} episodes...")
-    download_episodes(sftp, episodes)
+    download_episodes(sftp, episodes, DL_DIRECTORY)
     sftp.close()
     transport.close()
 
-def download_episodes(sftp, episodes):
+
+def download_from_ep_list(episodes, save_folder):
+    transport = paramiko.Transport((SFTP_CREDENTIALS['host'], SFTP_CREDENTIALS['port']))
+    transport.connect(username=SFTP_CREDENTIALS['username'], password=SFTP_CREDENTIALS['password'])
+    sftp = paramiko.SFTPClient.from_transport(transport)
+    download_episodes(sftp, episodes, save_folder)
+
+
+def download_episodes(sftp, episodes, save_folder):
     for episode in episodes:
         filename = os.path.basename(episode['sftp_url'])
-        local_path = os.path.join(DL_DIRECTORY, filename)
-        sftp.get(episode['sftp_url'], local_path)
+        local_path = os.path.join(save_folder, filename)
+        remote_path = episode["sftp_url"].replace("/mnt/md0/ftp/ftp", "", 1) # TODO i don't know if this is needed for all podcasts or just the few i've tried so far
+
+        sftp.get(remote_path, local_path)
+
 
 def search_title_and_description(conn, search_term):
     vaccine_in_title = search_in_title(conn, search_term)
