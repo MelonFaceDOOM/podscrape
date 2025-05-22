@@ -13,7 +13,7 @@ def torch_load_safe(*args, **kwargs):
 torch.load = torch_load_safe
 
 
-DEVICE = "cuda"
+DEVICE = "cuda" # cuda or cpu
 MODEL_NAME = "fw_tiny"  # fw_base, fw_tiny, or oa_base
 
 def oa_text_segments(model, mp3):
@@ -25,15 +25,15 @@ def oa_text_segments_word_level(model, mp3):
         str(mp3),
         word_timestamps=True          # ← get word info
     )
-    seg_rows  = []
+    seg_rows = []
     word_rows = []
 
-    for s in r["segments"]:
-        seg_rows.append((s["start"], s["end"], s["text"]))
+    for seg_idx, seg in enumerate(r["segments"]):
+        seg_rows.append((seg["start"], seg["end"], seg["text"]))
 
         # each word dict: {"word": "hello", "start": ..., "end": ...}
-        for idx, w in enumerate(s.get("words", [])):
-            word_rows.append((idx, w["start"], w["end"], w["word"]))
+        for word_idx, word in enumerate(seg.get("words", [])):
+            word_rows.append((seg_idx, word_idx, word["start"], word["end"], word["word"]))
 
     return seg_rows, word_rows
 
@@ -74,14 +74,12 @@ def fw_text_segments_word_level(model, mp3):
         beam_size=1,
         word_timestamps=True
     )
-    seg_rows  = []
+    seg_rows = []
     word_rows = []
-
-    for s in seg_iter:              # s is faster_whisper.Segment
-        seg_rows.append((s.start, s.end, s.text))
-        for idx, w in enumerate(s.words):
-            word_rows.append((idx, w.start, w.end, w.word))
-
+    for seg_idx, seg in enumerate(seg_iter):  # s is faster_whisper.Segment
+        seg_rows.append((seg.start, seg.end, seg.text))
+        for word_idx, word in enumerate(seg.words):
+            word_rows.append((seg_idx, word_idx, word.start, word.end, word.word))
     return seg_rows, word_rows
 
 
@@ -114,26 +112,25 @@ def get_model(name):
 
 
 def get_word_level_model(name):
+    # returns model, run_fn
     if name not in _loaded:
         _loaded[name] = MODELS[name]["builder"]()   # build once
-    return name, _loaded[name], MODELS[name]["word_level_runner"]
+    return _loaded[name], MODELS[name]["word_level_runner"]
 
 
 def transcribe_missing_episodes(client):
     # 1. Get episodes without a valid transcription
-    episodes = [ep for ep in client.get_episodes()  # will be ordered as newest first
-                if not is_valid_transcription(ep.get("transcript"))]
+    episodes = [ep for ep in client.get_episodes_with_no_transcript()] # will be ordered as newest first
     if not episodes:
         print("Nothing to do – all episodes already have a transcription.")
         return
 
+    print(f'transcribing {len(episodes)} episodes')  # TODO DELETE
     episodes = episodes[:1]  # TODO delete this after testing
     print(f'transcribing {len(episodes)} episodes')
 
-    t1 = time.perf_counter()
-
     # 2. Re‑use the same Whisper model and SFTP connection for the whole batch
-    model, run_fn = get_model(MODEL_NAME)
+    model, run_fn = get_word_level_model(MODEL_NAME)
     transport = paramiko.Transport((SFTP_CREDENTIALS["host"],
                                     SFTP_CREDENTIALS["port"]))
     transport.connect(username=SFTP_CREDENTIALS["username"],
@@ -145,34 +142,29 @@ def transcribe_missing_episodes(client):
         for ep in episodes:
             remote_path = ep['audio_path']
             try:
-                segments = download_and_transcribe(sftp, remote_path, run_fn, model)
+                fd, temp_path = tempfile.mkstemp(suffix=".mp3")  # make temp file to save file to
+                os.close(fd)
+                # save from sftp to temp file
+                with open(temp_path, "wb") as dst:
+                    sftp.getfo(remote_path, dst)
+                segs, words = run_fn(model, temp_path)
             except FileNotFoundError:
                 print(f"File not found on server → {remote_path}")
                 continue
             except Exception as e:
                 print(f"Failed to transcribe {remote_path}: {e}")
                 continue
-            # TODO insert each segment instead of full transcript.
-            cur.execute(
-                "UPDATE episodes SET transcript = %s WHERE id = %s",
-                (transcript, ep["id"]),
-            )
+            finally:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            word_level_insert(client, ep['id'], segs, words)
             print(f"✓ episode {ep['id']} updated")
 
-    client.conn.commit()        # flush all updates
     sftp.close()
     transport.close()
-    client.close()
-
-    t2 = time.perf_counter()
-    time_for_full_job = (t2-t1) * len(episodes) / 60 / 60
-    print(time_for_full_job)
-
-
 
 
 def word_level_insert(client, episode_id, seg_rows, word_rows):
-    # TODO implement in transcribe_missing_episodes after testing diff methods
     """call for each episode"""
     seg_sql = """
     INSERT INTO transcript_segments
@@ -181,7 +173,7 @@ def word_level_insert(client, episode_id, seg_rows, word_rows):
     ON CONFLICT (episode_id, seg_idx) DO UPDATE
         SET start_s = EXCLUDED.start_s,
             end_s   = EXCLUDED.end_s,
-            text    = EXCLUDED.text;
+            text    = EXCLUDED.text
     """
 
     word_sql = """
@@ -193,15 +185,15 @@ def word_level_insert(client, episode_id, seg_rows, word_rows):
 
     with client.conn.cursor() as cur:
         for seg_idx, (st, et, txt) in enumerate(seg_rows):
-            cur.execute(seg_sql, (episode_id, seg_idx, st, et, txt))
-            seg_id = cur.fetchone()[0]  # if you RETURNING id
-
-            for word_idx, st_w, et_w, word in word_rows:
+            cur.execute(
+                seg_sql + " RETURNING id;",
+                (episode_id, seg_idx, st, et, txt)
+            )
+            seg_id = cur.fetchone()[0]
+            words_for_seg = [w for w in word_rows if w[0] == seg_idx]
+            for _, word_idx, st_w, et_w, word in words_for_seg:
                 cur.execute(word_sql, (seg_id, word_idx, st_w, et_w, word))
-
-def is_valid_transcription(text: str | None) -> bool:
-    """Very simple validity test – expand later."""
-    return isinstance(text, str) and len(text.strip()) > 1
+        client.conn.commit()
 
 
 def download_and_transcribe(sftp, remote_path, run_fn, model):

@@ -87,34 +87,7 @@ class Client:
             cur.execute('''CREATE INDEX IF NOT EXISTS description_ts_idx ON episodes USING GIN (description_ts);''')
             cur.execute('''CREATE INDEX IF NOT EXISTS transcript_ts_idx ON episodes USING GIN (transcript_ts);''')
             self.conn.commit()
-    
-    # def truncate_tables(self):
-        # with self.conn.cursor() as cur:
-            # try:
-                # cur.execute('''TRUNCATE TABLE podcasts, episodes RESTART IDENTITY CASCADE;''')
-                # self.conn.commit()
-                # print("Tables truncated successfully.")
-            # except Exception as e:
-                # print(f"An error occurred: {e}")
-                
-    # def drop_tables(self):
-        # with self.conn.cursor() as cur:
-            # try:
-                # cur.execute('''DROP TABLE IF EXISTS episodes CASCADE;''')
-                # cur.execute('''DROP TABLE IF EXISTS podcasts CASCADE;''')
-                # self.conn.commit()
-                # print("Tables dropped successfully.")
-            # except Exception as e:
-                # print(f"An error occurred: {e}")
-            
-    def bulk_insert(self, rows, cols, table_name):
-        # rows and cols are both lists of strings. rows must be ordered in the same order as cols
-        cur = self.conn.cursor()
-        cols_string = ", ".join(cols)
-        query = f"INSERT INTO {table_name} ({cols_string}) VALUES %s ON CONFLICT DO NOTHING"
-        execute_values(cur, query, rows)
-        self.conn.commit()
-        cur.close()
+
     
     def insert_episode(self, episode_data):
         with self.conn.cursor() as cur:
@@ -127,16 +100,15 @@ class Client:
                 podcast_id = cur.fetchone()[0]    
             pub_date = datetime.strptime(episode_data['pubDate'], '%a, %d %b %Y %H:%M:%S %z')
             cur.execute('''
-                INSERT INTO episodes (id, guid, title, pub_date, download_url, sftp_url, description, transcript, podcast_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)''', 
+                INSERT INTO episodes (id, guid, title, pub_date, download_url, audio_path, description, podcast_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)''',
                  (episode_data['unique_id'],
                   episode_data['guid'],
                   episode_data['title'],
                   pub_date,
                   episode_data['downloadUrl'],
-                  episode_data['sftp_url'],
+                  episode_data['audio_path'],
                   episode_data.get('description', None),
-                  episode_data.get('transcript', None),
                   podcast_id))
             self.conn.commit()
             
@@ -151,6 +123,28 @@ class Client:
             cur.execute('''SELECT * from episodes ORDER BY pub_date DESC NULLS LAST;''')
             r = cur.fetchall()
         return r
+
+    def get_episodes_with_no_transcript(self):
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute('''SELECT * from episodes ORDER BY pub_date DESC NULLS LAST;''')
+            episodes = cur.fetchall()
+            episodes_with_no_transcript = []
+            for episode in episodes:
+                cur.execute(
+                '''
+                        SELECT COUNT(*)
+                        FROM transcript_words
+                        INNER JOIN transcript_segments ON
+                        transcript_words.seg_id = transcript_segments.id
+                        WHERE transcript_segments.episode_id = %s
+                    ''',
+                    (episode['id'],)
+                )
+                r = cur.fetchone()
+                transcript_word_count = r['count']
+                if transcript_word_count < 10:
+                    episodes_with_no_transcript.append(episode)
+            return episodes_with_no_transcript
             
     def get_id_list(self):
         with self.conn.cursor() as cur:
@@ -163,21 +157,24 @@ class Client:
             cur.execute('''SELECT COUNT(*) from episodes''')
             r = cur.fetchone()
             return r[0]
-            
-            
+
     def recent_episode_counts(self):
-        """get count for episodes saved to db in each of the last 7 days"""
+        """
+        Get episode counts for the 7 most recent *distinct* days
+        that have at least one episode in the database.
+        """
         with self.conn.cursor() as cur:
             cur.execute("""
-                SELECT 
-                    DATE(date_entered) AS day, 
-                    COUNT(*) AS episode_count
-                FROM episodes
-                WHERE date_entered >= NOW() - INTERVAL '7 days'
+                SELECT day, COUNT(*) AS episode_count
+                FROM (
+                    SELECT DATE(date_entered) AS day
+                    FROM episodes
+                    GROUP BY day
+                    ORDER BY day DESC
+                    LIMIT 7
+                ) recent_days
+                JOIN episodes ON DATE(episodes.date_entered) = recent_days.day
                 GROUP BY day
-                ORDER BY day
+                ORDER BY day DESC
             """)
-
-            # Fetch and print the results
-            rows = cur.fetchall()
-            return rows
+            return cur.fetchall()

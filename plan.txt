@@ -15,20 +15,8 @@ look at new table to see if any other changes are needed.
 git push/pull to ssh_m
 
 
-score transcribe test
-set up benchmark
-set up full transcription code with model selection as variable at top
 pip freeze, git push
-make note of imagemagick with legacy + adding folder to path + option change in python file after improt
-start ppt
- - status before
- - status now
- - benchmark results
- - transcription test app
- - estimated time
- - future daily load
- - next steps
- - measles assignment
- - search to filter down to vaccine-related stuff
- - upload filtered stuff to azure
-
+pull to server
+test update_local()
+confirm with db_recent_count()
+test sftp retrieval and gpu transcription on laptop

@@ -15,27 +15,25 @@ def download_episodes_and_save_remotely(episodes):
     transport = paramiko.Transport((SFTP_CREDENTIALS['host'], SFTP_CREDENTIALS['port']))
     transport.connect(username=SFTP_CREDENTIALS['username'], password=SFTP_CREDENTIALS['password'])
     sftp = paramiko.SFTPClient.from_transport(transport)
-    
-    consecutive_fails = 0 
     for episode in episodes:
+        consecutive_fails = 0
+        download_url = episode['downloadUrl']
+        filename = make_filename(episode)
+        remote_path = os.path.join(SFTP_SAVE_FOLDER, filename)
         try:
-            download_url = episode['downloadUrl']
-            filename = make_filename(episode)
-            remote_path = os.path.join(SFTP_SAVE_FOLDER, filename)
             download_and_upload_episode(download_url, remote_path, sftp)
-            episode['sftp_url'] = remote_path
-            client.insert_episode(episode)
-            consecutive_fails = 0
         except Exception as e:
             if consecutive_fails == 6:
-                pass # stay at 6
+                pass  # stay at 6
             else:
                 consecutive_fails += 1
-            print(f"sleeping for {2**consecutive_fails}", e)
+            print(f"sleeping for {2 ** consecutive_fails} seconds\n", e)
             current_timestamp = datetime.now()
             formatted_timestamp = current_timestamp.strftime('%Y-%m-%d %H:%M')
             print(formatted_timestamp, e)
-            time.sleep(2**consecutive_fails)
+            time.sleep(2 ** consecutive_fails)
+        episode['audio_path'] = remote_path
+        client.insert_episode(episode)
     sftp.close()
     transport.close()
     client.close()
@@ -53,27 +51,26 @@ def download_and_upload_episode(download_url, remote_path, sftp):
 def download_episodes_and_save_locally(episodes):
     # meant to be run on the sftp pc, not a remote pc
     client = get_client()
-    consecutive_fails = 0 
     for episode in episodes:
+        consecutive_fails = 0
+        download_url = episode['downloadUrl']
+        filename = make_filename(episode)
+        save_location = os.path.join(LOCAL_SAVE_FOLDER, filename)
         try:
-            download_url = episode['downloadUrl']
-            # os.makedirs(LOCAL_SAVE_FOLDER, exist_ok=True)
-            filename = make_filename(episode)
-            save_location = os.path.join(LOCAL_SAVE_FOLDER, filename)
             download_episode_locally(download_url, save_location)
-            episode['sftp_url'] = save_location
-            client.insert_episode(episode)
-            consecutive_fails = 0
         except Exception as e:
             if consecutive_fails == 6:
-                pass # stay at 6
+                pass  # stay at 6
             else:
                 consecutive_fails += 1
-            print(f"sleeping for {2**consecutive_fails}", e)
+            print(f"sleeping for {2 ** consecutive_fails}", e)
             current_timestamp = datetime.now()
             formatted_timestamp = current_timestamp.strftime('%Y-%m-%d %H:%M')
             print(formatted_timestamp, e)
-            time.sleep(2**consecutive_fails)
+            time.sleep(2 ** consecutive_fails)
+        sftp_path = os.path.join(SFTP_SAVE_FOLDER, filename)
+        episode['audio_path'] = sftp_path  # TODO: confirm that this is working
+        client.insert_episode(episode)
     client.close()
     
     
@@ -91,7 +88,7 @@ def download_episode_locally(download_url, save_location):
 def make_filename(episode):
     filename = episode['downloadUrl'].split('/')[-1]  # this filename is only referenced to get the extension. a custom filename will be used for the rest of the name
     extension = filename.split('.')[-1]
-    extension = extension.split('?')[0] # remove any ? data that might be on the end of the url
+    extension = extension.split('?')[0]  # remove any ? data that might be on the end of the url
     return episode['unique_id'] + "." + extension
     
 

@@ -8,11 +8,21 @@ import os, tempfile
 from moviepy.editor import AudioFileClip, TextClip, CompositeVideoClip, concatenate_videoclips, VideoFileClip
 from moviepy.editor import ColorClip
 import textwrap
-
 import moviepy.config as mpc
-mpc.change_settings({"IMAGEMAGICK_BINARY": "magick"}) # tells moviepy to use "imagemagick convert" instead of "convert"
+
+"""
+this thing will create a video with transcript text on it + audio from podcast
+v nice for accuracy checking
+
+it requires:
+mpv installed and MPV_PATH defined
+imagemagick installed with legacy option enabled + adding folder to PATH
+there's also a line in this file that changes an option to make moviepy look for "imagemagick convert" instead of
+    a different binary in windows called "convert"
+"""
 
 MPV_PATH = r"C:\Users\mmjac\Downloads\mpv\mpv.exe"
+mpc.change_settings({"IMAGEMAGICK_BINARY": "magick"})  # tells moviepy to use "imagemagick convert" instead of "convert"
 
 def transcribe_test(client):
     transcripts = []
@@ -26,7 +36,7 @@ def transcribe_test(client):
 
     # 2. load models
     model_names = ["oa_base", "fw_base", "fw_tiny"]
-    models = [get_word_level_model(model_name) for model_name in model_names]  # returns (name, model, run_fn)
+    models = [(model_name, *get_word_level_model(model_name)) for model_name in model_names]
 
     # 3. get SFTP connection
     transport = paramiko.Transport((SFTP_CREDENTIALS["host"],
