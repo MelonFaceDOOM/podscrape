@@ -4,8 +4,10 @@ import platform
 import sys
 
 
-# Path to the thing.py script
-SCRIPT_NAME = "podscrape.py"
+# Path to the podscrape.py script
+SCRIPT_NAME = "/home/ftp/podscrape/podscrape.py"
+LOGFILE = "/home/ftp/podscrape/update_log.txt"
+
 try:
     save_location = sys.argv[1]
 except:
@@ -20,12 +22,14 @@ def main():
     else:
         current_os = platform.system()
         if current_os == "Windows":
-            subprocess.Popen(['python', SCRIPT_NAME, f"update_{save_location}"], creationflags=subprocess.CREATE_NEW_CONSOLE)
+            subprocess.Popen(['python', SCRIPT_NAME, f"update_{save_location}"],
+                             creationflags=subprocess.CREATE_NEW_CONSOLE)
             print(f"Started {SCRIPT_NAME} on Windows")
         elif current_os == "Linux":
-            with open('log.txt', 'a') as log_file:
-                subprocess.Popen(['nohup', 'python', SCRIPT_NAME, f"update_{save_location}"], stdout=log_file, stderr=log_file)
-            print(f"Started {SCRIPT_NAME} on Linux with nohup, logging to log.txt")
+            with open(LOGFILE, 'a+') as log_file:
+                subprocess.Popen(['nohup', 'python', SCRIPT_NAME, f"update_{save_location}"], stdout=log_file,
+                                 stderr=log_file)
+            print(f"Started {SCRIPT_NAME} on Linux with nohup, logging to {LOGFILE}")
         else:
             raise Exception("Unsupported operating system")
 
@@ -41,6 +45,6 @@ def is_process_running(script_name):
             pass
     return False
 
-    
+
 if __name__ == "__main__":
     main()
