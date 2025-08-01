@@ -1,4 +1,0 @@
-Benchmarking 20 of 39199 remaining episodes…
-openai_whisper_base          : 8471.9 s for 20 eps →  est. 4612.4 h for all
-faster_whisper_base          : 2458.0 s for 20 eps →  est. 1338.2 h for all
-faster_whisper_tiny          : 1928.3 s for 20 eps →  est. 1049.8 h for all
