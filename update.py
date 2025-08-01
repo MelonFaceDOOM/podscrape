@@ -11,9 +11,11 @@ LOGFILE = "/home/ftp/podscrape/update_log.txt"
 try:
     save_location = sys.argv[1]
 except:
-    raise ValueError("must provide 'local' or 'remote' argument to specify where to save data created from this script")
+    raise ValueError(
+        "must provide 'local' or 'remote' argument to specify where to save data created from this script")
 if save_location not in ["local", "remote"]:
-    raise ValueError("must provide 'local' or 'remote' argument to specify where to save data created from this script")
+    raise ValueError(
+        "must provide 'local' or 'remote' argument to specify where to save data created from this script")
 
 
 def main():
@@ -29,7 +31,8 @@ def main():
             with open(LOGFILE, 'a+') as log_file:
                 subprocess.Popen(['nohup', 'python', SCRIPT_NAME, f"update_{save_location}"], stdout=log_file,
                                  stderr=log_file)
-            print(f"Started {SCRIPT_NAME} on Linux with nohup, logging to {LOGFILE}")
+            print(
+                f"Started {SCRIPT_NAME} on Linux with nohup, logging to {LOGFILE}")
         else:
             raise Exception("Unsupported operating system")
 

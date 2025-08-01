@@ -1,0 +1,8 @@
+__pycache__/
+logs/
+.python-version
+plan.txt
+misc/
+venv/
+.env
+config.py
