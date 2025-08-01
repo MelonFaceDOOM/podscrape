@@ -11,6 +11,10 @@ from sftp_client import get_sftp_client
 # Force torch.load to default to weights_only=True unless caller overrides it
 torch_load_orig = torch.load
 
+# supress multi openmp warning
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
+
 
 def torch_load_safe(*args, **kwargs):
     kwargs.setdefault("weights_only", True)

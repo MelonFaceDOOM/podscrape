@@ -10,6 +10,7 @@ Download and transcribe podcasts
 * test_connections.py - test db & sftp connections
 * db_client.py has a setup func for a postgres db (u have to create the db first)
 * download_from_db.py has some searching/saving features, but will need to eventually be expanded
+* transcribe.py - transcribe episodes. should eventually just be added into podscrape.py
 to include searching transcripts (expand db_client as well to support) as well as more analysis
 on the stuff the filtered data
 

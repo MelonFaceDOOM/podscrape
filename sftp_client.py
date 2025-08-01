@@ -79,3 +79,12 @@ class SFTPClient:
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.close()
+
+if __name__ == "__main__":
+    with get_sftp_client() as sftp:
+        found, missing = sftp.locate_files(["up-first_48b1114f-cbf8-4985-bdad-e068e89a714a.mp3"], "podcasts")
+    print("found")
+    print(found)
+    print()
+    print("missing")
+    print(missing)
