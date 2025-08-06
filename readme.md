@@ -20,3 +20,7 @@ estimates for transcribing 39k podcasts:
 * faster_whisper_base          : 2458.0 s for 20 eps →  est. 1338.2 h for all
 * faster_whisper_tiny          : 1928.3 s for 20 eps →  est. 1049.8 h for all
 
+## Notes
+* You may need to use python 3.11 and fiddle with torch/cuda installation :)
+* ffmpeg needs to be installed
+* cudnn9 is needed for faster_whisper.

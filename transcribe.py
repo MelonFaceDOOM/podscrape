@@ -2,6 +2,7 @@ from functools import partial
 import os
 import tempfile
 import whisper
+import traceback
 import torch
 from faster_whisper import WhisperModel
 from contextlib import ExitStack
@@ -14,17 +15,18 @@ torch_load_orig = torch.load
 # supress multi openmp warning
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
+# manually add to path in case you don't have admin rights to edit path normally
+ffmpeg_path = "C:/ffmpeg/bin"
+os.environ["PATH"] = ffmpeg_path + os.pathsep + os.environ["PATH"]
 
 def torch_load_safe(*args, **kwargs):
     kwargs.setdefault("weights_only", True)
     return torch_load_orig(*args, **kwargs)
 
-
 torch.load = torch_load_safe
 
-
 DEVICE = "cuda"  # cuda or cpu
-MODEL_NAME = "fw_tiny"  # fw_base, fw_tiny, or oa_base
+MODEL_NAME = "oa_base"  # fw_base, fw_tiny, or oa_base
 
 
 def oa_text_segments(model, mp3):
@@ -143,45 +145,61 @@ def transcribe_missing_episodes():
         sftp = stack.enter_context(get_sftp_client())
 
         # 2. Get episodes without a valid transcription
-        episodes = [ep for ep in db.get_episodes_with_no_transcript()]
+        episodes = db.get_episodes_with_no_transcript()
         # episodes will be ordered as newest first
         if not episodes:
             print("Nothing to do – all episodes already have a transcription.")
             return
 
-        print(f'transcribing {len(episodes)} episodes')  # TODO DELETE
-        episodes = episodes[:1]  # TODO delete this after testing
         print(f'transcribing {len(episodes)} episodes')
-
+        
         # 3. Load Whisper model
         model, run_fn = get_word_level_model(MODEL_NAME)
 
         # 4. Process each episode
         for ep in episodes:
+            temp_path = None
             try:
-                temp_path = save_ep_to_temp_path(ep, sftp)
-                # segs, words = run_fn(model, temp_path)  # transcribe
-            except FileNotFoundError:
-                print(f"File not found on server → {ep['audio_path']}")
-                continue
-            except Exception as e:
-                print(f"Failed to transcribe {ep['audio_path']}: {e}")
-                continue
-            finally:
-                if os.path.exists(temp_path):
+                temp_path = save_ep_to_proj_folder(ep, sftp)
+
+                try:
+                    segs, words = run_fn(model, temp_path)  # transcribe
+                except Exception as e:
+                    print(f"Failed to transcribe {ep['audio_path']}: {e}")
+                    traceback.print_exc()
+                    continue
+
+                db.word_level_insert(ep['id'], segs, words)
+                print(f"episode {ep['audio_path']} updated")
+
+            except KeyboardInterrupt:
+                print("Interrupted by user. Cleaning up temp file and exiting...")
+                if temp_path and os.path.exists(temp_path):
                     os.remove(temp_path)
-            # db.word_level_insert(ep['id'], segs, words)
-            print(f"episode {ep['id']} updated")
+                raise  # re-raise to exit cleanly
+
+            except Exception as e:
+                print(f"Failed to process episode {ep['audio_path']}: {e}")
+                traceback.print_exc()
+                continue
+
+            finally:
+                if temp_path and os.path.exists(temp_path):
+                    os.remove(temp_path)
 
 
-def save_ep_to_temp_path(ep, sftp):
+def save_ep_to_proj_folder(ep, sftp):
     remote_path = ep['audio_path']
-    # make temp file to save file to
-    fd, temp_path = tempfile.mkstemp(suffix=".mp3")
-    os.close(fd)
-    # save from sftp to temp file
+    try:
+        sftp.sftp.stat(remote_path)
+    except FileNotFoundError:
+        print(f"Remote file not found: {remote_path}")
+        raise
+    temp_dir = os.getcwd()
+    temp_path = os.path.join(temp_dir, f"temp_{os.path.basename(remote_path)}")
     with open(temp_path, "wb") as dst:
         sftp.sftp.getfo(remote_path, dst)
+    print(f"Path to transcribe: {temp_path}")
     return temp_path
 
 

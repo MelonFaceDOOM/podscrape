@@ -9,7 +9,7 @@ load_dotenv()
 
 def test_torch_device():
     print(f"PyTorch version: {torch.__version__}")
-
+    print(torch.backends.cudnn.is_available())  # should be True
     # Check for CUDA availability
     if torch.cuda.is_available():
         print(f"CUDA is available. Device count: {torch.cuda.device_count()}")
@@ -40,19 +40,25 @@ def troubleshoot_torch():
 
 
 def test_db():
-    with get_db_client() as db:
-        print(db.ep_count())
+    try:
+        with get_db_client() as db:
+            ep_count = db.ep_count()
+        print(f"SUCCESS: connected to db. {ep_cont} episodes found")
+    except Exception as e: 
+        print(f"FAIL: could not connect to DB: {e}")
 
 
 def test_sftp():
-    sftp = get_sftp_client()
-    sftp.list_root_directory()
-    podcast_dir = os.getenv("SFTP_PODCAST_FOLDER")
-    sftp.list_directory(podcast_dir)
+    try:
+        with get_sftp_client() as sftp:
+            root_dirs = sftp.list_root_directory()
+        print(f"SUCCESS: connected to sftp. Root dir shows {root_dirs}")
+    except Exception as e:
+        print(f"FAIL: could not connect to SFTP: {e}")
 
 
 if __name__ == "__main__":
-    test_db()
-    test_sftp()
+    # test_db()
+    # test_sftp()
     test_torch_device()
     # troubleshoot_torch()

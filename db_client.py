@@ -1,8 +1,9 @@
 from datetime import datetime
-import psycopg2
-from psycopg2.extras import RealDictCursor
-from dotenv import load_dotenv
 import os
+import psycopg2
+from psycopg2.extras import RealDictCursor, execute_values
+from collections import defaultdict
+from dotenv import load_dotenv
 from contextlib import contextmanager
 from sshtunnel import SSHTunnelForwarder
 
@@ -203,26 +204,27 @@ class DBClient:
 
     def get_episodes_with_no_transcript(self):
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                '''SELECT * from episodes ORDER BY pub_date DESC NULLS LAST;''')
-            episodes = cur.fetchall()
-            episodes_with_no_transcript = []
-            for episode in episodes:
-                cur.execute(
-                    '''
-                        SELECT COUNT(*)
-                        FROM transcript_words
-                        INNER JOIN transcript_segments ON
-                        transcript_words.seg_id = transcript_segments.id
-                        WHERE transcript_segments.episode_id = %s
-                    ''',
-                    (episode['id'],)
-                )
-                r = cur.fetchone()
-                transcript_word_count = r['count']
-                if transcript_word_count < 10:
-                    episodes_with_no_transcript.append(episode)
-            return episodes_with_no_transcript
+            cur.execute("""
+                SELECT e.*, COUNT(s.id) AS segment_count
+                FROM episodes e
+                LEFT JOIN transcript_segments s ON e.id = s.episode_id
+                GROUP BY e.id
+                HAVING COUNT(s.id) = 0
+                ORDER BY e.pub_date DESC NULLS LAST
+            """)
+            return cur.fetchall()
+
+    def get_episodes_with_transcript(self):
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT e.*, COUNT(s.id) AS segment_count
+                FROM episodes e
+                LEFT JOIN transcript_segments s ON e.id = s.episode_id
+                GROUP BY e.id
+                HAVING COUNT(s.id) > 0
+                ORDER BY e.pub_date DESC NULLS LAST
+            """)
+            return cur.fetchall()
 
     def get_id_list(self):
         with self.conn.cursor() as cur:
@@ -291,7 +293,7 @@ class DBClient:
         return results
 
     def word_level_insert(self, episode_id, seg_rows, word_rows):
-        """insert a word-level transcript for an episode"""
+        """Insert or update a word-level transcript for an episode."""
         seg_sql = """
         INSERT INTO transcript_segments
             (episode_id, seg_idx, start_s, end_s, text)
@@ -300,27 +302,59 @@ class DBClient:
             SET start_s = EXCLUDED.start_s,
                 end_s   = EXCLUDED.end_s,
                 text    = EXCLUDED.text
+        RETURNING id;
         """
-
         word_sql = """
         INSERT INTO transcript_words
             (seg_id, word_idx, start_s, end_s, word)
-        VALUES (%s, %s, %s, %s, %s)
-        ON CONFLICT DO NOTHING;
+        VALUES %s
+        ON CONFLICT DO NOTHING
         """
 
-        with self.conn.cursor() as cur:
-            for seg_idx, (st, et, txt) in enumerate(seg_rows):
-                cur.execute(
-                    seg_sql + " RETURNING id;",
-                    (episode_id, seg_idx, st, et, txt)
-                )
-                seg_id = cur.fetchone()[0]
-                words_for_seg = [w for w in word_rows if w[0] == seg_idx]
-                for _, word_idx, st_w, et_w, word in words_for_seg:
-                    cur.execute(word_sql, (seg_id, word_idx, st_w, et_w, word))
-            self.conn.commit()
+        # Pre-group word_rows by seg_idx for fast lookup
+        word_map = defaultdict(list)
+        for seg_idx, word_idx, start_w, end_w, word in word_rows:
+            word_map[seg_idx].append((word_idx, start_w, end_w, word))
 
+        with self.conn.cursor() as cur:
+            for seg_idx, (start_s, end_s, text) in enumerate(seg_rows):
+                # Insert/update segment and get seg_id
+                cur.execute(seg_sql, (episode_id, seg_idx, start_s, end_s, text))
+                seg_id = cur.fetchone()[0]
+
+                # Prepare word rows for this segment
+                words_for_segment = word_map.get(seg_idx, [])
+                if words_for_segment:
+                    word_rows_to_insert = [
+                        (seg_id, word_idx, start_w, end_w, word)
+                        for word_idx, start_w, end_w, word in words_for_segment
+                    ]
+                    # Batch insert words
+                    execute_values(cur, word_sql, word_rows_to_insert)
+
+            self.conn.commit()
+        
+    def get_transcript_for_episode_audio_path(self, audio_path):
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                SELECT string_agg(ts.text, ' ' ORDER BY ts.seg_idx) AS full_transcript
+                FROM transcript_segments ts
+                JOIN episodes e ON ts.episode_id = e.id
+                WHERE e.audio_path = %s;
+            """, (audio_path,))
+            result = cur.fetchone()
+        return result[0] if result and result[0] else ""
+        
+    def get_transcript_for_episode(self, episode_id):
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                SELECT string_agg(text, ' ' ORDER BY seg_idx) AS full_transcript
+                FROM transcript_segments
+                WHERE episode_id = %s;
+            """, (episode_id,))
+            result = cur.fetchone()
+        return result[0] if result and result[0] else ""
+        
     def __enter__(self):
         return self
 

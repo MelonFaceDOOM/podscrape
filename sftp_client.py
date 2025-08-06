@@ -67,11 +67,21 @@ class SFTPClient:
             print(f"Error listing directory '{path}': {e}")
             return []
 
-    def locate_files(self, expected_urls, sftp_dir="/"):
-        filenames = self.sftp.listdir(sftp_dir)
-        sftp_urls = set(os.path.join(sftp_dir, name) for name in filenames)
-        missing = [url for url in expected_urls if url not in sftp_urls]
-        found = [url for url in expected_urls if url in sftp_urls]
+    def locate_files(self, expected_filenames, sftp_dir = '/'):
+        """
+        checks whether expected_filenames exist in sftp_dir
+        """
+        actual_filenames = self.sftp.listdir(sftp_dir)
+        sftp_urls = set(os.path.join(sftp_dir.strip('/'), name) for name in actual_filenames)
+        normalized_expected = [
+            os.path.join(
+                sftp_dir.strip('/'),
+                p.replace('\\', '/').lstrip('/')
+            ) for p in expected_filenames
+        ]
+
+        found = [p for p in normalized_expected if p in sftp_urls]
+        missing = [p for p in normalized_expected if p not in sftp_urls]
         return found, missing
 
     def __enter__(self):
@@ -79,12 +89,3 @@ class SFTPClient:
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.close()
-
-if __name__ == "__main__":
-    with get_sftp_client() as sftp:
-        found, missing = sftp.locate_files(["up-first_48b1114f-cbf8-4985-bdad-e068e89a714a.mp3"], "podcasts")
-    print("found")
-    print(found)
-    print()
-    print("missing")
-    print(missing)
