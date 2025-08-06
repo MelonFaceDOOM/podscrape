@@ -6,6 +6,7 @@ import torch
 
 load_dotenv()
 
+
 def test_torch_device():
     print(f"PyTorch version: {torch.__version__}")
 
@@ -28,12 +29,15 @@ def test_torch_device():
         print(c)
     except Exception as e:
         print(f"Tensor operation failed on {device}: {e}")
-        
+
+
 def troubleshoot_torch():
     print(torch.__version__)
     print(torch.version.cuda)
     print(torch.cuda.is_available())
-    print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else "No GPU")
+    print(torch.cuda.get_device_name(0)
+          if torch.cuda.is_available() else "No GPU")
+
 
 def test_db():
     with get_db_client() as db:

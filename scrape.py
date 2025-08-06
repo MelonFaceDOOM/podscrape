@@ -13,12 +13,17 @@ LOCAL_SAVE_FOLDER = os.getenv("LOCAL_SAVE_FOLDER")
 
 """
 Scrape podcasts.
-Save mp3 to either to local dir or to sftp server.
+Save audio file to either to local dir or to sftp server.
 Save metadata to db.
 """
 
 
 def download_episodes_and_save_remotely(episodes):
+    """Take a list of episode dicts (with var names in RSS format,
+        with audio_path and unique_id added
+        NOT in DB format, which has some diff var names
+        download the audio file, save it to sftp
+        if that succeeds, save metadata to db"""
     with ExitStack() as stack:
         # db and sftp will both close when stack context is exited
         db = stack.enter_context(get_db_client())
@@ -37,7 +42,12 @@ def download_episodes_and_save_remotely(episodes):
 
 
 def download_episodes_and_save_locally(episodes):
-    # save to a local folder
+    """This is typically only run on the PC hosting the SFTP server
+        Take a list of episode dicts (with var names in RSS format,
+        with audio_path and unique_id added
+        NOT in DB format, which has some diff var names
+        download the audio file, save it a local folder 
+        if that succeeds, save metadata to db"""
     with get_db_client as db:
         for episode in episodes:
             download_url = episode['downloadUrl']
@@ -71,7 +81,7 @@ def download_to_sftp_with_retries(url, dest_path, sftp, max_retries=6):
 def download_and_upload_episode(download_url, remote_path, sftp):
     with requests.get(download_url, stream=True) as r:
         r.raise_for_status()
-        with sftp.file(remote_path, 'wb') as remote_file:
+        with sftp.sftp.file(remote_path, 'wb') as remote_file:
             for chunk in r.iter_content(chunk_size=8192):
                 if chunk:
                     remote_file.write(chunk)
@@ -100,7 +110,7 @@ def download_locally_with_retries(download_url, save_location, max_retries=6):
 
 def make_filename(episode):
     # this filename is only referenced to get the extension. a custom filename will be used for the rest of the name
-    filename = episode['downloadUrl'].split('/')[-1]
+    filename = episode['download_url'].split('/')[-1]
     extension = filename.split('.')[-1]
     # remove any ? data that might be on the end of the url
     extension = extension.split('?')[0]

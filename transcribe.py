@@ -15,7 +15,6 @@ torch_load_orig = torch.load
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 
-
 def torch_load_safe(*args, **kwargs):
     kwargs.setdefault("weights_only", True)
     return torch_load_orig(*args, **kwargs)
@@ -143,7 +142,7 @@ def transcribe_missing_episodes():
         db = stack.enter_context(get_db_client())
         sftp = stack.enter_context(get_sftp_client())
 
-    # 2. Get episodes without a valid transcription
+        # 2. Get episodes without a valid transcription
         episodes = [ep for ep in db.get_episodes_with_no_transcript()]
         # episodes will be ordered as newest first
         if not episodes:
@@ -154,14 +153,14 @@ def transcribe_missing_episodes():
         episodes = episodes[:1]  # TODO delete this after testing
         print(f'transcribing {len(episodes)} episodes')
 
-        # 2. Load Whisper model
+        # 3. Load Whisper model
         model, run_fn = get_word_level_model(MODEL_NAME)
 
-        # 3. Process each episode
+        # 4. Process each episode
         for ep in episodes:
             try:
                 temp_path = save_ep_to_temp_path(ep, sftp)
-                segs, words = run_fn(model, temp_path)  # transcribe
+                # segs, words = run_fn(model, temp_path)  # transcribe
             except FileNotFoundError:
                 print(f"File not found on server → {ep['audio_path']}")
                 continue
@@ -171,7 +170,7 @@ def transcribe_missing_episodes():
             finally:
                 if os.path.exists(temp_path):
                     os.remove(temp_path)
-            db.word_level_insert(ep['id'], segs, words)
+            # db.word_level_insert(ep['id'], segs, words)
             print(f"episode {ep['id']} updated")
 
 

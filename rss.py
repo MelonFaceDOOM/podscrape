@@ -16,29 +16,36 @@ PODNEWS_TOP50 = os.getenv("PODNEWS_TOP50")
 def update_rss_file():
     """get rss_url for each podcast
     do request on rss_url and save response to file
-    overwrites existing file"""
+    overwrites existing file
+
+    COLUMNS MATCH RSS VAR NAMES, WHICH DIFFER FROM DB COLUMNS 
+    """
     with get_db_client() as db:
-        podcasts = db.get_podcasts()
+        db_podcasts = db.get_podcasts()
 
     rss_podcasts = {}
-    for podcast in podcasts:
-        r = requests.get(podcast['rss_url'])
+    for db_podcast in db_podcasts:
+        r = requests.get(db_podcast['rss_url'])
         rss = r.text
-        rss_podcasts[podcast['title']] = {}
-        rss_podcasts[podcast['title']]['rssUrl'] = podcast['rss_url']
-        rss_podcasts[podcast['title']]['rss'] = rss
+        rss_podcasts[db_podcast['title']] = {}
+        rss_podcasts[db_podcast['title']]['rssUrl'] = db_podcast['rss_url']
+        rss_podcasts[db_podcast['title']]['rss'] = rss
 
     with open(RSS_FILE, 'w') as f:
         json.dump(rss_podcasts, f, indent=4)
 
 
 def get_unscraped_episodes():
+    """returns list of episodes from rss file that are not yet in database
+    episodes are dicts with rss var names (NOT DB VAR NAMES)
+    will create and add "unique_id" (slugified and filesystem-safce)
+    to each episode based on its guid"""
     episodes_from_rss = read_episodes_info_from_rss()
     rss_ids = [e['unique_id'] for e in episodes_from_rss]
     with get_db_client() as db:
-        existing_ids = db.get_existing_ids(rss_ids)
+        ids_already_in_db = db.get_existing_ids(rss_ids)
         unscraped_episodes = [
-            e for e in episodes_from_rss if e['unique_id'] not in existing_ids]
+            e for e in episodes_from_rss if e['unique_id'] not in ids_already_in_db]
     unscraped_episodes = [
         e for e in unscraped_episodes if is_valid_url(e['downloadUrl'])]
     # TODO why are any even invalid? what should i do with those?
@@ -54,8 +61,9 @@ def is_valid_url(url):
 
 
 def read_episodes_info_from_rss():
-    """reads episodes into a list of dicts and creates a unique id based on podcast name and guid that is slugified
-    so that it is compatible with filesystems"""
+    """returns episode dicts with rss var names (NOT DB VAR NAMES)
+    will create and add "unique_id" (slugified and filesystem-safce)
+    to each episode based on its guid"""
     episodes = []
     with open(RSS_FILE, 'r') as f:
         rss_podcasts = json.load(f)
