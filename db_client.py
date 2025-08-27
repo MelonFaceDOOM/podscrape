@@ -1,8 +1,9 @@
-from datetime import datetime
 import os
 import psycopg2
 from psycopg2.extras import RealDictCursor, execute_values
+from datetime import datetime, timezone, timedelta
 from collections import defaultdict
+from typing import Optional, Tuple
 from dotenv import load_dotenv
 from contextlib import contextmanager
 from sshtunnel import SSHTunnelForwarder
@@ -10,6 +11,7 @@ from sshtunnel import SSHTunnelForwarder
 
 load_dotenv()
 
+LEASE_MINUTES = 180  # how long eps are checked-out for transcription
 
 @contextmanager
 def get_db_client():
@@ -106,16 +108,20 @@ class DBClient:
              """)
             cur.execute("""
                 CREATE TABLE episodes (
-                    id             TEXT PRIMARY KEY,
-                    date_entered   TIMESTAMP DEFAULT current_timestamp,
-                    audio_path     TEXT NOT NULL,      -- sftp://… or local path
-                    guid           TEXT NOT NULL,
-                    duration_s     NUMERIC,            -- optional, whole episode length
-                    title          TEXT,
-                    description    TEXT,
-                    pub_date       TIMESTAMP,
-                    download_url   TEXT,
-                    podcast_id     INTEGER REFERENCES podcasts(id)
+                    id                TEXT PRIMARY KEY,
+                    date_entered      TIMESTAMP DEFAULT current_timestamp,
+                    audio_path        TEXT NOT NULL,      -- sftp://… or local path
+                    guid              TEXT NOT NULL,
+                    duration_s        NUMERIC,            -- optional, whole episode length
+                    title             TEXT,
+                    description       TEXT,
+                    pub_date          TIMESTAMP,
+                    download_url      TEXT,
+                    podcast_id        INTEGER REFERENCES podcasts(id),
+                    transcript_status TEXT NOT NULL DEFAULT 'pending',      -- 'pending' | 'processing' | 'done' | 'failed'
+                    lease_expires_at  TIMESTAMPTZ,
+                    worker_id         TEXT,
+                    transcription_timestamp_completed TIMESTAMPTZ
                 );
             """)
             cur.execute("""
@@ -161,33 +167,88 @@ class DBClient:
                 '''CREATE INDEX IF NOT EXISTS description_ts_idx ON episodes USING GIN (description_ts);''')
             cur.execute(
                 '''CREATE INDEX IF NOT EXISTS transcript_ts_idx ON episodes USING GIN (transcript_ts);''')
+            cur.execute(
+                '''CREATE INDEX IF NOT EXISTS episodes_transcribe_queue_idx
+                    ON episodes (transcript_status, lease_expires_at)''')
         self.conn.commit()
 
-    def insert_episode(self, episode_data):
-        with self.conn.cursor() as cur:
-            cur.execute('SELECT id FROM podcasts WHERE title = %s',
-                        (episode_data['podcast_title'],))
-            podcast = cur.fetchone()
-            if podcast:
-                podcast_id = podcast[0]
-            else:
-                cur.execute('INSERT INTO podcasts (title) VALUES (%s) RETURNING id',
-                            (episode_data['podcast_title'],))
-                podcast_id = cur.fetchone()[0]
-            pub_date = datetime.strptime(
-                episode_data['pubDate'], '%a, %d %b %Y %H:%M:%S %z')
-            cur.execute('''
-                INSERT INTO episodes (id, guid, title, pub_date, download_url, audio_path, description, podcast_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)''',
-                        (episode_data['unique_id'],
-                         episode_data['guid'],
-                         episode_data['title'],
-                         pub_date,
-                         episode_data['downloadUrl'],
-                         episode_data['audio_path'],
-                         episode_data.get('description', None),
-                         podcast_id))
-            self.conn.commit()
+from datetime import datetime
+from email.utils import parsedate_to_datetime
+
+def insert_episode(self, episode_data):
+    """
+    Upsert an episode row.
+    - Creates the podcast if needed.
+    - Inserts a new episode with transcript_status='pending'.
+    - On conflict, refreshes metadata fields but NEVER touches
+      transcript_status / worker_id / lease_expires_at /
+      transcription_timestamp_completed.
+    """
+    # Resolve podcast_id (create if missing)
+    with self.conn.cursor() as cur:
+        cur.execute('SELECT id FROM podcasts WHERE title = %s',
+                    (episode_data['podcast_title'],))
+        row = cur.fetchone()
+        if row:
+            podcast_id = row[0]
+        else:
+            cur.execute(
+                'INSERT INTO podcasts (title) VALUES (%s) RETURNING id',
+                (episode_data['podcast_title'],)
+            )
+            podcast_id = cur.fetchone()[0]
+
+        # Parse pubDate robustly
+        pub_dt = episode_data.get('pubDate')
+        if isinstance(pub_dt, datetime):
+            pub_date = pub_dt
+        else:
+            # Try RFC 2822 (common in RSS) first, then your original format
+            try:
+                pub_date = parsedate_to_datetime(pub_dt) if pub_dt else None
+            except Exception:
+                pub_date = datetime.strptime(
+                    pub_dt, '%a, %d %b %Y %H:%M:%S %z'
+                ) if pub_dt else None
+
+        # Prepare fields
+        ep_id       = episode_data['unique_id']
+        guid        = episode_data.get('guid')
+        title       = episode_data.get('title')
+        download_url= episode_data.get('downloadUrl')
+        audio_path  = episode_data.get('audio_path')   # may be None (download later)
+        description = episode_data.get('description')
+
+        # Insert (or update on conflict) – do not touch transcription state on updates
+        cur.execute(
+            """
+            INSERT INTO episodes (
+                id, guid, title, pub_date, download_url, audio_path,
+                description, podcast_id,
+                transcript_status, worker_id, lease_expires_at,
+                transcription_timestamp_completed
+            )
+            VALUES (%s, %s, %s, %s, %s, %s,
+                    %s, %s,
+                    'pending', NULL, NULL,
+                    NULL)
+            ON CONFLICT (id) DO UPDATE SET
+                guid         = COALESCE(EXCLUDED.guid, episodes.guid),
+                title        = COALESCE(EXCLUDED.title, episodes.title),
+                pub_date     = COALESCE(EXCLUDED.pub_date, episodes.pub_date),
+                download_url = COALESCE(EXCLUDED.download_url, episodes.download_url),
+                -- keep existing audio_path if we already have one; otherwise use the new one
+                audio_path   = COALESCE(episodes.audio_path, EXCLUDED.audio_path),
+                description  = COALESCE(EXCLUDED.description, episodes.description),
+                podcast_id   = COALESCE(EXCLUDED.podcast_id, episodes.podcast_id)
+            RETURNING id
+            """,
+            (ep_id, guid, title, pub_date, download_url, audio_path,
+             description, podcast_id)
+        )
+
+    self.conn.commit()
+
 
     def get_podcasts(self):
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -293,7 +354,12 @@ class DBClient:
         return results
 
     def word_level_insert(self, episode_id, seg_rows, word_rows):
-        """Insert or update a word-level transcript for an episode."""
+        """
+        Insert or update a word-level transcript for an episode.
+
+        seg_rows:  [(start_s, end_s, text), ...]
+        word_rows: [(seg_idx, word_idx, start_s, end_s, word), ...]
+        """
         seg_sql = """
         INSERT INTO transcript_segments
             (episode_id, seg_idx, start_s, end_s, text)
@@ -304,35 +370,43 @@ class DBClient:
                 text    = EXCLUDED.text
         RETURNING id;
         """
+
         word_sql = """
         INSERT INTO transcript_words
             (seg_id, word_idx, start_s, end_s, word)
         VALUES %s
-        ON CONFLICT DO NOTHING
+        ON CONFLICT (seg_id, word_idx) DO NOTHING
         """
 
-        # Pre-group word_rows by seg_idx for fast lookup
-        word_map = defaultdict(list)
-        for seg_idx, word_idx, start_w, end_w, word in word_rows:
-            word_map[seg_idx].append((word_idx, start_w, end_w, word))
+        # ---- Normalize to builtin types (no numpy scalars) ----
+        norm_segs = [
+            (int(idx), float(start), float(end), str(text))
+            for idx, (start, end, text) in enumerate(seg_rows or [])
+        ]
+
+        norm_words = [
+            (int(seg_idx), int(word_idx), float(w_start), float(w_end), str(token))
+            for (seg_idx, word_idx, w_start, w_end, token) in (word_rows or [])
+        ]
+
+        # Group words by seg_idx so we can attach them after we know seg_id
+        words_by_seg = defaultdict(list)
+        for seg_idx, word_idx, start_w, end_w, word in norm_words:
+            words_by_seg[seg_idx].append((word_idx, start_w, end_w, word))
 
         with self.conn.cursor() as cur:
-            for seg_idx, (start_s, end_s, text) in enumerate(seg_rows):
-                # Insert/update segment and get seg_id
+            for seg_idx, start_s, end_s, text in norm_segs:
+                # Insert/update segment row; get its PK
                 cur.execute(seg_sql, (episode_id, seg_idx, start_s, end_s, text))
                 seg_id = cur.fetchone()[0]
 
-                # Prepare word rows for this segment
-                words_for_segment = word_map.get(seg_idx, [])
-                if words_for_segment:
-                    word_rows_to_insert = [
-                        (seg_id, word_idx, start_w, end_w, word)
-                        for word_idx, start_w, end_w, word in words_for_segment
-                    ]
-                    # Batch insert words
-                    execute_values(cur, word_sql, word_rows_to_insert)
+                # Batch insert this segment's words (if any)
+                wrows = words_by_seg.get(seg_idx, [])
+                if wrows:
+                    rows = [(seg_id, widx, sw, ew, wtxt) for (widx, sw, ew, wtxt) in wrows]
+                    execute_values(cur, word_sql, rows, page_size=500)
 
-            self.conn.commit()
+        self.conn.commit()
         
     def get_transcript_for_episode_audio_path(self, audio_path):
         with self.conn.cursor() as cur:
@@ -354,6 +428,233 @@ class DBClient:
             """, (episode_id,))
             result = cur.fetchone()
         return result[0] if result and result[0] else ""
+        
+    def claim_episodes(self, worker_id: str, batch_size: int = 1):
+        """
+        claim eps to transcribe them so as to prevent other transcribers from overlapping jobs
+        Atomically claim up to batch_size 'pending' (or expired) episodes for this worker.
+        Uses SKIP LOCKED so concurrent workers don't collide.
+        """
+        now = datetime.now(timezone.utc)
+        lease_until = now + timedelta(minutes=LEASE_MINUTES)
+
+        with self.conn:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    WITH cte AS (
+                      SELECT id
+                        FROM episodes
+                       WHERE transcript_status IN ('pending','processing')
+                         AND (
+                               transcript_status = 'pending'
+                            OR lease_expires_at IS NULL
+                            OR lease_expires_at < NOW()
+                         )
+                       ORDER BY date_entered DESC
+                       FOR UPDATE SKIP LOCKED
+                       LIMIT %s
+                    )
+                    UPDATE episodes e
+                       SET transcript_status = 'processing',
+                           worker_id = %s,
+                           lease_expires_at = %s
+                      FROM cte
+                     WHERE e.id = cte.id
+                 RETURNING e.id
+                    """,
+                    (batch_size, worker_id, lease_until),
+                )
+                rows = cur.fetchall()
+                return [r[0] for r in rows]
+
+    def mark_done(self, episode_id: str):
+        with self.conn:
+            with self.conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE episodes
+                       SET transcript_status = 'done',
+                           worker_id = NULL,
+                           lease_expires_at = NULL,
+                           transcription_timestamp_completed = NOW()
+                     WHERE id = %s
+                """, (episode_id,))
+
+    def mark_failed(self, episode_id: str, retry: bool = True):
+        with self.conn:
+            with self.conn.cursor() as cur:
+                if retry:
+                    cur.execute(
+                        """
+                        UPDATE episodes
+                           SET transcript_status = 'pending',
+                               worker_id = NULL,
+                               lease_expires_at = NULL
+                         WHERE id = %s
+                        """,
+                        (episode_id,),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE episodes
+                           SET transcript_status = 'failed',
+                               worker_id = NULL,
+                               lease_expires_at = NULL
+                         WHERE id = %s
+                        """,
+                        (episode_id,),
+                    )
+
+    def extend_lease(self, episode_id: str, minutes: int = 30):
+        with self.conn:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE episodes
+                       SET lease_expires_at = NOW() + (%s || ' minutes')::interval
+                     WHERE id = %s
+                    """,
+                    (minutes, episode_id),
+                )
+                
+    def active_workers_info(self):
+        """
+        Return rows for workers currently processing (status='processing').
+        Each row: (worker_id, processing_count, next_lease_exp, last_lease_exp)
+        Also returns pending_total separately.
+        """
+        with self.conn.cursor() as cur:
+            # workers with in-flight work
+            cur.execute("""
+                SELECT worker_id,
+                       COUNT(*) AS processing,
+                       MIN(lease_expires_at) AS next_lease_exp,
+                       MAX(lease_expires_at) AS last_lease_exp
+                  FROM episodes
+                 WHERE transcript_status = 'processing'
+              GROUP BY worker_id
+              ORDER BY processing DESC NULLS LAST
+            """)
+            workers = cur.fetchall()
+
+            # how many pending are waiting (not assigned to any worker)
+            cur.execute("""
+                SELECT COUNT(*)
+                  FROM episodes
+                 WHERE transcript_status = 'pending'
+            """)
+            pending_total = cur.fetchone()[0]
+
+        # Normalize worker_id None -> "(none)"
+        rows = []
+        for w in workers:
+            wid, processing, next_lease, last_lease = w
+            rows.append({
+                "worker_id": wid or "(none)",
+                "processing": int(processing),
+                "next_lease_exp": next_lease,
+                "last_lease_exp": last_lease,
+            })
+        return {"pending_total": int(pending_total), "workers": rows}
+
+    def nth_most_recent_transcription(self, n: int = 1) -> Optional[dict]:
+        """
+        Returns a dict with episode id, audio_path, and completion timestamp.
+        """
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, audio_path, transcription_timestamp_completed
+                  FROM episodes
+                 WHERE transcription_timestamp_completed IS NOT NULL
+                 ORDER BY transcription_timestamp_completed DESC, id DESC
+                 OFFSET %s
+                 LIMIT 1
+            """, (max(0, n-1),))
+            row = cur.fetchone()
+            if not row:
+                return None
+            return {
+                "id": row[0],
+                "audio_path": row[1],
+                "completed_at": row[2],
+            }
+            
+    def transcript_stats(self, episode_id: str) -> dict:
+        """
+        duration_s: (max end_s - min start_s) over segments (0 if none)
+        word_count: count(*) from transcript_words joined to this episode
+        """
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                SELECT COALESCE(MIN(start_s),0), COALESCE(MAX(end_s),0)
+                  FROM transcript_segments
+                 WHERE episode_id = %s
+            """, (episode_id,))
+            mn, mx = cur.fetchone() or (0.0, 0.0)
+            duration_s = max(0.0, float(mx) - float(mn))
+
+            cur.execute("""
+                SELECT COUNT(*)
+                  FROM transcript_words w
+                  JOIN transcript_segments s ON s.id = w.seg_id
+                 WHERE s.episode_id = %s
+            """, (episode_id,))
+            word_count = int(cur.fetchone()[0])
+
+        return {"duration_s": duration_s, "word_count": word_count}
+        
+    def transcript_words_excerpt(self, episode_id: str, limit_words: int = 1000) -> Tuple[str, int]:
+        """
+        Returns (text, words_returned). Prefers word-level; falls back to segment text.
+        """
+        with self.conn.cursor() as cur:
+            # Try word-level first
+            cur.execute("""
+                SELECT w.word
+                  FROM transcript_words w
+                  JOIN transcript_segments s ON s.id = w.seg_id
+                 WHERE s.episode_id = %s
+                 ORDER BY s.seg_idx, w.word_idx
+                 LIMIT %s
+            """, (episode_id, limit_words))
+            words = [r[0] for r in cur.fetchall()]
+
+            if words:
+                text = " ".join(words)
+                return text, len(words)
+
+            # Fallback: segments text → split into words
+            cur.execute("""
+                SELECT text
+                  FROM transcript_segments
+                 WHERE episode_id = %s
+                 ORDER BY seg_idx
+            """, (episode_id,))
+            segs = [r[0] or "" for r in cur.fetchall()]
+            joined = " ".join(segs)
+            toks = joined.split()
+            excerpt = " ".join(toks[:limit_words])
+            return excerpt, min(limit_words, len(toks))
+
+    def recent_transcription_counts(self, limit_days: int = 7):
+        """
+        Return counts for the most recent N calendar dates where completions exist.
+        Output: list of dicts [{day: date, count: int}, ...] ordered DESC by day.
+        """
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                SELECT (transcription_timestamp_completed AT TIME ZONE 'UTC')::date AS day,
+                       COUNT(*) AS cnt
+                  FROM episodes
+                 WHERE transcription_timestamp_completed IS NOT NULL
+                   AND transcript_status = 'done'
+              GROUP BY day
+              ORDER BY day DESC
+                 LIMIT %s
+            """, (limit_days,))
+            rows = cur.fetchall()
+        return [{"day": r[0], "count": int(r[1])} for r in rows]
         
     def __enter__(self):
         return self

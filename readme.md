@@ -20,7 +20,16 @@ estimates for transcribing 39k podcasts:
 * faster_whisper_base          : 2458.0 s for 20 eps →  est. 1338.2 h for all
 * faster_whisper_tiny          : 1928.3 s for 20 eps →  est. 1049.8 h for all
 
-## Notes
-* You may need to use python 3.11 and fiddle with torch/cuda installation :)
-* ffmpeg needs to be installed
-* cudnn9 is needed for faster_whisper.
+## Installation Notes
+Installation order matters. faster-whisper needs to be installed before torch.
+
+The following should work:
+
+pip install -U faster-whisper ctranslate2  
+pip install -U torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124  
+pip install nvidia-cuda-runtime-cu12==12.4.127  
+pip install nvidia-cuda-nvrtc-cu12==12.4.127  
+pip install nvidia-cublas-cu12==12.4.5.8  
+pip install nvidia-cudnn-cu12==9.5.0.50
+
+pip install psycopg2 paramiko moviepy lxml sshtunnel feedparser

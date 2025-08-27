@@ -6,3 +6,4 @@ misc/
 venv/
 .env
 config.py
+temp_*
