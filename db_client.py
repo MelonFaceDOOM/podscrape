@@ -2,6 +2,7 @@ import os
 import psycopg2
 from psycopg2.extras import RealDictCursor, execute_values
 from datetime import datetime, timezone, timedelta
+from email.utils import parsedate_to_datetime
 from collections import defaultdict
 from typing import Optional, Tuple
 from dotenv import load_dotenv
@@ -172,83 +173,79 @@ class DBClient:
                     ON episodes (transcript_status, lease_expires_at)''')
         self.conn.commit()
 
-from datetime import datetime
-from email.utils import parsedate_to_datetime
+    def insert_episode(self, episode_data):
+        """
+        Upsert an episode row.
+        - Creates the podcast if needed.
+        - Inserts a new episode with transcript_status='pending'.
+        - On conflict, refreshes metadata fields but NEVER touches
+          transcript_status / worker_id / lease_expires_at /
+          transcription_timestamp_completed.
+        """
+        # Resolve podcast_id (create if missing)
+        with self.conn.cursor() as cur:
+            cur.execute('SELECT id FROM podcasts WHERE title = %s',
+                        (episode_data['podcast_title'],))
+            row = cur.fetchone()
+            if row:
+                podcast_id = row[0]
+            else:
+                cur.execute(
+                    'INSERT INTO podcasts (title) VALUES (%s) RETURNING id',
+                    (episode_data['podcast_title'],)
+                )
+                podcast_id = cur.fetchone()[0]
 
-def insert_episode(self, episode_data):
-    """
-    Upsert an episode row.
-    - Creates the podcast if needed.
-    - Inserts a new episode with transcript_status='pending'.
-    - On conflict, refreshes metadata fields but NEVER touches
-      transcript_status / worker_id / lease_expires_at /
-      transcription_timestamp_completed.
-    """
-    # Resolve podcast_id (create if missing)
-    with self.conn.cursor() as cur:
-        cur.execute('SELECT id FROM podcasts WHERE title = %s',
-                    (episode_data['podcast_title'],))
-        row = cur.fetchone()
-        if row:
-            podcast_id = row[0]
-        else:
+            # Parse pubDate robustly
+            pub_dt = episode_data.get('pubDate')
+            if isinstance(pub_dt, datetime):
+                pub_date = pub_dt
+            else:
+                # Try RFC 2822 (common in RSS) first, then your original format
+                try:
+                    pub_date = parsedate_to_datetime(pub_dt) if pub_dt else None
+                except Exception:
+                    pub_date = datetime.strptime(
+                        pub_dt, '%a, %d %b %Y %H:%M:%S %z'
+                    ) if pub_dt else None
+
+            # Prepare fields
+            ep_id       = episode_data['unique_id']
+            guid        = episode_data.get('guid')
+            title       = episode_data.get('title')
+            download_url= episode_data.get('downloadUrl')
+            audio_path  = episode_data.get('audio_path')   # may be None (download later)
+            description = episode_data.get('description')
+
+            # Insert (or update on conflict) – do not touch transcription state on updates
             cur.execute(
-                'INSERT INTO podcasts (title) VALUES (%s) RETURNING id',
-                (episode_data['podcast_title'],)
+                """
+                INSERT INTO episodes (
+                    id, guid, title, pub_date, download_url, audio_path,
+                    description, podcast_id,
+                    transcript_status, worker_id, lease_expires_at,
+                    transcription_timestamp_completed
+                )
+                VALUES (%s, %s, %s, %s, %s, %s,
+                        %s, %s,
+                        'pending', NULL, NULL,
+                        NULL)
+                ON CONFLICT (id) DO UPDATE SET
+                    guid         = COALESCE(EXCLUDED.guid, episodes.guid),
+                    title        = COALESCE(EXCLUDED.title, episodes.title),
+                    pub_date     = COALESCE(EXCLUDED.pub_date, episodes.pub_date),
+                    download_url = COALESCE(EXCLUDED.download_url, episodes.download_url),
+                    -- keep existing audio_path if we already have one; otherwise use the new one
+                    audio_path   = COALESCE(episodes.audio_path, EXCLUDED.audio_path),
+                    description  = COALESCE(EXCLUDED.description, episodes.description),
+                    podcast_id   = COALESCE(EXCLUDED.podcast_id, episodes.podcast_id)
+                RETURNING id
+                """,
+                (ep_id, guid, title, pub_date, download_url, audio_path,
+                 description, podcast_id)
             )
-            podcast_id = cur.fetchone()[0]
 
-        # Parse pubDate robustly
-        pub_dt = episode_data.get('pubDate')
-        if isinstance(pub_dt, datetime):
-            pub_date = pub_dt
-        else:
-            # Try RFC 2822 (common in RSS) first, then your original format
-            try:
-                pub_date = parsedate_to_datetime(pub_dt) if pub_dt else None
-            except Exception:
-                pub_date = datetime.strptime(
-                    pub_dt, '%a, %d %b %Y %H:%M:%S %z'
-                ) if pub_dt else None
-
-        # Prepare fields
-        ep_id       = episode_data['unique_id']
-        guid        = episode_data.get('guid')
-        title       = episode_data.get('title')
-        download_url= episode_data.get('downloadUrl')
-        audio_path  = episode_data.get('audio_path')   # may be None (download later)
-        description = episode_data.get('description')
-
-        # Insert (or update on conflict) – do not touch transcription state on updates
-        cur.execute(
-            """
-            INSERT INTO episodes (
-                id, guid, title, pub_date, download_url, audio_path,
-                description, podcast_id,
-                transcript_status, worker_id, lease_expires_at,
-                transcription_timestamp_completed
-            )
-            VALUES (%s, %s, %s, %s, %s, %s,
-                    %s, %s,
-                    'pending', NULL, NULL,
-                    NULL)
-            ON CONFLICT (id) DO UPDATE SET
-                guid         = COALESCE(EXCLUDED.guid, episodes.guid),
-                title        = COALESCE(EXCLUDED.title, episodes.title),
-                pub_date     = COALESCE(EXCLUDED.pub_date, episodes.pub_date),
-                download_url = COALESCE(EXCLUDED.download_url, episodes.download_url),
-                -- keep existing audio_path if we already have one; otherwise use the new one
-                audio_path   = COALESCE(episodes.audio_path, EXCLUDED.audio_path),
-                description  = COALESCE(EXCLUDED.description, episodes.description),
-                podcast_id   = COALESCE(EXCLUDED.podcast_id, episodes.podcast_id)
-            RETURNING id
-            """,
-            (ep_id, guid, title, pub_date, download_url, audio_path,
-             description, podcast_id)
-        )
-
-    self.conn.commit()
-
+        self.conn.commit()
 
     def get_podcasts(self):
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
